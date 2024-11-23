@@ -10,7 +10,7 @@ TREST -> * F TREST | ε
 F -> ( E ) | num
 """
 
-# initialize the generated paraer
+# initialize the generated parser
 cfg = CFGParser()
 cfg.parse_grammar(grammar_text)
 parser = LL1Parser(cfg)
