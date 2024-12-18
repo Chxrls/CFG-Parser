@@ -1,16 +1,15 @@
 from dataclasses import dataclass
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
-from tabulate import tabulate  # Added for nicer table formatting
 
 @dataclass
 class Production:
     """Represents a production rule in the grammar"""
     left: str  # Left-hand side (non-terminal)
     right: List[str]  # Right-hand side (terminals and non-terminals)
-    
+
     def __str__(self):
-        return f"{self.left} -> {' '.join(self.right)}"
+        return f"{self.left} → {' '.join(self.right)}"
 
 class CFGParser:
     def __init__(self):
@@ -52,19 +51,13 @@ class LL1Parser:
         
     def compute_first_sets(self) -> None:
         """Compute FIRST sets for all symbols"""
-        # Initialize with terminals
-        for terminal in self.cfg.terminals:
-            self.first[terminal].add(terminal)
-        
-        # Repeated iterations until no changes
         changed = True
         while changed:
             changed = False
             for prod in self.cfg.productions:
                 first_before = len(self.first[prod.left])
                 
-                # Empty production
-                if not prod.right or prod.right == ['ε']:
+                if not prod.right:  # Empty production
                     self.first[prod.left].add('ε')
                     continue
                     
@@ -72,26 +65,9 @@ class LL1Parser:
                 if first_symbol in self.cfg.terminals:
                     self.first[prod.left].add(first_symbol)
                 else:  # Non-terminal
-                    # Recursive FIRST set computation
-                    new_first = set()
-                    all_nullable = True
-                    for symbol in prod.right:
-                        if symbol in self.cfg.terminals:
-                            new_first.add(symbol)
-                            all_nullable = False
-                            break
-                        
-                        symbol_first = self.first[symbol]
-                        new_first.update(symbol_first - {'ε'})
-                        
-                        if 'ε' not in symbol_first:
-                            all_nullable = False
-                            break
-                    
-                    if all_nullable:
-                        new_first.add('ε')
-                    
-                    self.first[prod.left].update(new_first)
+                    self.first[prod.left].update(
+                        self.first[first_symbol] - {'ε'}
+                    )
                 
                 if len(self.first[prod.left]) > first_before:
                     changed = True
@@ -132,16 +108,10 @@ class LL1Parser:
             first_string = self.compute_first_of_string(prod.right)
             
             for terminal in first_string - {'ε'}:
-                # Check for conflicts
-                if (prod.left, terminal) in self.parsing_table:
-                    print(f"Warning: Parsing table conflict for ({prod.left}, {terminal})")
                 self.parsing_table[(prod.left, terminal)] = prod
             
             if 'ε' in first_string:
                 for terminal in self.follow[prod.left]:
-                    # Check for conflicts
-                    if (prod.left, terminal) in self.parsing_table:
-                        print(f"Warning: Parsing table conflict for ({prod.left}, {terminal})")
                     self.parsing_table[(prod.left, terminal)] = prod
     
     def compute_first_of_string(self, symbols: List[str]) -> Set[str]:
@@ -168,119 +138,226 @@ class LL1Parser:
             result.add('ε')
         return result
     
-    def display_details(self):
-        """Display detailed parsing information"""
-        print("\n--- FIRST SETS ---")
-        for symbol, first_set in sorted(self.first.items()):
-            print(f"FIRST({symbol}) = {first_set}")
+    def display_parsing_table(self) -> None:
+        """Display the LL(1) parsing table with proper formatting."""
+        print("\n--- LL(1) Parsing Table ---")
+
+        # Collect all terminals and add '$' for end-of-input marker
+        terminals = sorted(self.cfg.terminals) + ['$']
+        non_terminals = sorted(self.cfg.non_terminals)
+
+        # Determine column width dynamically based on longest terminal/non-terminal or production
+        column_width = max(
+            10,  # Minimum width for readability
+            max(len(str(nt)) for nt in non_terminals + terminals),
+            max(len(str(prod)) for prod in self.parsing_table.values()) if self.parsing_table else 0
+        )
         
-        print("\n--- FOLLOW SETS ---")
-        for symbol, follow_set in sorted(self.follow.items()):
-            print(f"FOLLOW({symbol}) = {follow_set}")
-        
-        print("\n--- PARSING TABLE ---")
-        # Prepare table headers
-        headers = [''] + sorted(list(self.cfg.terminals) + ['$'])
-        table_data = []
-        
-        # Create table rows
-        for non_terminal in sorted(self.cfg.non_terminals):
-            row = [non_terminal]
-            for terminal in headers[1:]:
-                # Find production for this (non-terminal, terminal) pair
-                prod = self.parsing_table.get((non_terminal, terminal), None)
-                row.append(str(prod) if prod else '-')
-            table_data.append(row)
-        
-        # Print table using tabulate for nice formatting
-        print(tabulate(table_data, headers=headers, tablefmt='grid'))
+        # Print the header row
+        print(f"{'NT/T'.ljust(column_width)}", end="")
+        for terminal in terminals:
+            print(f"{terminal.ljust(column_width)}", end="")
+        print()
+
+        # Print the table rows for each non-terminal
+        for nt in non_terminals:
+            print(f"{nt.ljust(column_width)}", end="")
+            for terminal in terminals:
+                production = self.parsing_table.get((nt, terminal), None)
+                cell = str(production) if production else "-"
+                print(f"{cell.ljust(column_width)}", end="")
+            print()  # New line
+
     
-    def parse(self, input_string: str, verbose: bool = False) -> bool:
-        """Parse input string using LL(1) parsing table"""
+    def parse_with_trace(self, input_string: str) -> None:
+        """Parse input string with detailed tracing"""
         input_string = input_string.split()
         input_string.append('$')
         
         stack = ['$', self.cfg.start_symbol]
         index = 0
         
-        if verbose:
-            print(f"\n--- Parsing: {' '.join(input_string[:-1])} ---")
-            print(f"Initial Stack: {stack}")
-        
-        derivation_steps = []
+        print("\n--- Parsing Trace ---")
+        print(f"{'Stack':30} {'Input':30} {'Action':30}")
+        print("-" * 90)
         
         while stack:
-            top = stack.pop()
-            current_input = input_string[index]
+            # Print current state
+            current_stack = ' '.join(reversed(stack))
+            current_input = ' '.join(input_string[index:])
+            print(f"{current_stack:30} {current_input:30}", end="")
             
-            if verbose:
-                print(f"Top of stack: {top}, Current input: {current_input}")
+            top = stack.pop()
+            current_input_symbol = input_string[index]
             
             if top in self.cfg.terminals or top == '$':
-                if top == current_input:
+                if top == current_input_symbol:
+                    print(f"{'Match ' + top:30}")
                     index += 1
-                    if verbose:
-                        print(f"Matched terminal: {top}")
+                    if index >= len(input_string):
+                        print("\nParse successful!")
+                        return
                 else:
-                    if verbose:
-                        print(f"Parsing failed: Expected {top}, got {current_input}")
-                    return False
+                    print(f"{'ERROR: Terminal mismatch':30}")
+                    return
             else:
-                if (top, current_input) not in self.parsing_table:
-                    if verbose:
-                        print(f"No parsing rule for ({top}, {current_input})")
-                    return False
+                if (top, current_input_symbol) not in self.parsing_table:
+                    print(f"{'ERROR: No matching production':30}")
+                    return
                     
-                production = self.parsing_table[(top, current_input)]
+                production = self.parsing_table[(top, current_input_symbol)]
+                print(f"{'Expand ' + str(production):30}")
                 
-                if verbose:
-                    print(f"Applied production: {production}")
-                
-                # Record derivation step
                 if production.right != ['ε']:
                     for symbol in reversed(production.right):
                         stack.append(symbol)
-                
-                if verbose:
-                    print(f"Updated Stack: {stack}")
         
-        return True
+        print("\nParse unsuccessful!")
 
-# Example usage script
-if __name__ == "__main__":
-    # Arithmetic expression grammar
-    grammar_text = """
-    E -> T EREST
-    EREST -> + T EREST | ε
-    T -> F TREST
-    TREST -> * F TREST | ε
-    F -> ( E ) | num
-    """
+    def validate_grammar(self) -> bool:
+        """
+        Comprehensive grammar validation to detect:
+        1. Left Recursion
+        2. Ambiguity in LL(1) Parsing
+        
+        Returns:
+        - True if grammar is valid for LL(1) parsing
+        - False with error messages if invalid
+        """
+        # Detect Direct Left Recursion
+        def detect_direct_left_recursion():
+            direct_left_recursive = []
+            for prod in self.cfg.productions:
+                # Check if the first symbol of the production's right side 
+                # is the same as the left-hand non-terminal
+                if prod.right and prod.right[0] == prod.left:
+                    direct_left_recursive.append(prod)
+            return direct_left_recursive
 
-    # Initialize the parser
-    cfg = CFGParser()
-    cfg.parse_grammar(grammar_text)
+        # Detect Indirect Left Recursion
+        def detect_indirect_left_recursion():
+            indirect_left_recursive = []
+            
+            # Create a derivation graph
+            derivation_graph = defaultdict(set)
+            for prod in self.cfg.productions:
+                left = prod.left
+                for symbol in prod.right:
+                    if symbol in self.cfg.non_terminals and symbol != left:
+                        derivation_graph[left].add(symbol)
+            
+            # Check for cycles that can lead to left recursion
+            def has_path_to_self(start, current, visited=None):
+                if visited is None:
+                    visited = set()
+                
+                if current == start:
+                    return True
+                
+                visited.add(current)
+                
+                for next_symbol in derivation_graph[current]:
+                    if next_symbol not in visited:
+                        if has_path_to_self(start, next_symbol, visited):
+                            return True
+                
+                return False
+            
+            # Check each non-terminal for potential indirect left recursion
+            for nt in self.cfg.non_terminals:
+                if has_path_to_self(nt, nt):
+                    indirect_left_recursive.append(nt)
+            
+            return indirect_left_recursive
 
-    # Create LL(1) parser
-    parser = LL1Parser(cfg)
+        # Detect Ambiguity in Parsing Table
+        def detect_parsing_table_ambiguity():
+            ambiguous_entries = {}
+            
+            # Compute First and Follow sets if not already computed
+            if not self.first:
+                self.compute_first_sets()
+            if not self.follow:
+                self.compute_follow_sets()
+            
+            # Detect conflicts during parsing table construction
+            for prod in self.cfg.productions:
+                first_string = self.compute_first_of_string(prod.right)
+                
+                # Check conflicts for terminals in FIRST set
+                for terminal in first_string - {'ε'}:
+                    key = (prod.left, terminal)
+                    if key in self.parsing_table:
+                        # Conflict detected if different productions exist for same (NT, Terminal)
+                        if self.parsing_table[key] != prod:
+                            if key not in ambiguous_entries:
+                                ambiguous_entries[key] = [self.parsing_table[key], prod]
+                            else:
+                                ambiguous_entries[key].append(prod)
+                
+                # Check conflicts for FOLLOW set when production can derive ε
+                if 'ε' in first_string:
+                    for terminal in self.follow[prod.left]:
+                        key = (prod.left, terminal)
+                        if key in self.parsing_table:
+                            # Conflict detected if different productions exist for same (NT, Terminal)
+                            if self.parsing_table[key] != prod:
+                                if key not in ambiguous_entries:
+                                    ambiguous_entries[key] = [self.parsing_table[key], prod]
+                                else:
+                                    ambiguous_entries[key].append(prod)
+            
+            return ambiguous_entries
 
-    # Compute parsing artifacts
-    parser.compute_first_sets()
-    parser.compute_follow_sets()
-    parser.build_parsing_table()
+        try:
+            # 1. Check Direct Left Recursion
+            direct_left_recursive = detect_direct_left_recursion()
+            if direct_left_recursive:
+                error_msg = "Direct Left Recursion Detected:\n"
+                error_msg += "\n".join(str(prod) for prod in direct_left_recursive)
+                print(error_msg)
+                return False
+            
+            # 2. Check Indirect Left Recursion
+            #indirect_left_recursive = detect_indirect_left_recursion()
+            #if indirect_left_recursive:
+            #    error_msg = "Indirect Left Recursion Detected in Non-Terminals:\n"
+            #    error_msg += ", ".join(indirect_left_recursive)
+            #    print(error_msg)
+            #    return False
+            
+            # 3. Check for ambiguity
+            ambiguous_entries = detect_parsing_table_ambiguity()
+            if ambiguous_entries:
+                error_msg = "Grammar Ambiguity Detected:\n"
+                for (nt, terminal), prods in ambiguous_entries.items():
+                    error_msg += f"Conflict at ({nt}, {terminal}): {prods}\n"
+                print(error_msg)
+                return False
+            
+            print("\nGrammar is valid for LL(1) parsing.")
+            return True
+        
+        except Exception as e:
+            print(f"\nGrammar Validation Failed: {e}")
+            return False
 
-    # Display parsing details
-    parser.display_details()
-
-    # Test expressions
-    test_expressions = [
-        "num + num * num",        # Valid expression
-        "( num + num ) * num",    # Valid expression
-        "num * num +",            # Invalid expression (incomplete)
-    ]
-
-    # Parse and display details for each expression
-    for expr in test_expressions:
-        print(f"\n=== Parsing Expression: {expr} ===")
-        result = parser.parse(expr, verbose=True)
-        print(f"Parsing Result: {'Valid' if result else 'Invalid'}\n")
+    def prepare_parser(self) -> bool:
+        """
+        Prepares the parser by validating grammar and computing necessary sets.
+        
+        Returns:
+        - True if parser is ready for parsing
+        - False if grammar validation fails
+        """
+        if not self.validate_grammar():
+            return False
+        
+        try:
+            self.compute_first_sets()
+            self.compute_follow_sets()
+            self.build_parsing_table()
+            return True
+        except Exception as e:
+            print(f"Error preparing parser: {e}")
+            return False
